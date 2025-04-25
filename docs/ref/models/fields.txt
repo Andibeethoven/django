@@ -497,7 +497,7 @@ The default value can also be set at the database level with
 .. attribute:: Field.editable
 
 If ``False``, the field will not be displayed in the admin or any other
-:class:`~django.forms.ModelForm`. They are also skipped during :ref:`model
+:class:`~django.forms.ModelForm`. It will also be skipped during :ref:`model
 validation <validating-objects>`. Default is ``True``.
 
 ``error_messages``
@@ -542,18 +542,20 @@ cross-site scripting attack.
 
 If ``True``, this field is the primary key for the model.
 
-If you don't specify ``primary_key=True`` for any field in your model, Django
-will automatically add a field to hold the primary key, so you don't need to
-set ``primary_key=True`` on any of your fields unless you want to override the
-default primary-key behavior. The type of auto-created primary key fields can
-be specified per app in :attr:`AppConfig.default_auto_field
-<django.apps.AppConfig.default_auto_field>` or globally in the
-:setting:`DEFAULT_AUTO_FIELD` setting. For more, see
+If you don't specify ``primary_key=True`` for any field in your model and have
+not defined a composite primary key, Django will automatically add a field to
+hold the primary key. So, you don't need to set ``primary_key=True`` on any of
+your fields unless you want to override the default primary-key behavior. The
+type of auto-created primary key fields can be specified per app in
+:attr:`AppConfig.default_auto_field <django.apps.AppConfig.default_auto_field>`
+or globally in the :setting:`DEFAULT_AUTO_FIELD` setting. For more, see
 :ref:`automatic-primary-key-fields`.
 
 ``primary_key=True`` implies :attr:`null=False <Field.null>` and
-:attr:`unique=True <Field.unique>`. Only one primary key is allowed on an
-object.
+:attr:`unique=True <Field.unique>`. Only one field per model can set
+``primary_key=True``. Composite primary keys must be defined using
+:class:`CompositePrimaryKey` instead of setting this flag to ``True`` for all
+fields to maintain this invariant.
 
 The primary key field is read-only. If you change the value of the primary
 key on an existing object and then save it, a new object will be created
@@ -561,6 +563,10 @@ alongside the old one.
 
 The primary key field is set to ``None`` when
 :meth:`deleting <django.db.models.Model.delete>` an object.
+
+.. versionchanged:: 5.2
+
+    The ``CompositePrimaryKey`` field was added.
 
 ``unique``
 ----------
@@ -716,8 +722,8 @@ isn't defined.
 
 A virtual field used for defining a composite primary key.
 
-This field must be defined as the model's ``pk`` field. If present, Django will
-create the underlying model table with a composite primary key.
+This field must be defined as the model's ``pk`` attribute. If present, Django
+will create the underlying model table with a composite primary key.
 
 The ``*field_names`` argument is a list of positional field names that compose
 the primary key.
@@ -1272,7 +1278,7 @@ when :attr:`~django.forms.Field.localize` is ``False`` or
 ``GeneratedField``
 ------------------
 
-.. class:: GeneratedField(expression, output_field, db_persist=None, **kwargs)
+.. class:: GeneratedField(*, expression, output_field, db_persist, **kwargs)
 
 A field that is always computed based on other fields in the model. This field
 is managed and updated by the database itself. Uses the ``GENERATED ALWAYS``
@@ -1309,8 +1315,8 @@ materialized view.
 
 .. admonition:: Refresh the data
 
-    Since the database always computed the value, the object must be reloaded
-    to access the new value after :meth:`~Model.save()`, for example, by using
+    Since the database computes the value, the object must be reloaded to
+    access the new value after :meth:`~Model.save()`, for example, by using
     :meth:`~Model.refresh_from_db()`.
 
 .. admonition:: Database limitations
@@ -1830,8 +1836,9 @@ The possible values for :attr:`~ForeignKey.on_delete` are found in
             limit_choices_to={"is_staff": True},
         )
 
-    causes the corresponding field on the ``ModelForm`` to list only ``Users``
-    that have ``is_staff=True``. This may be helpful in the Django admin.
+    causes the corresponding field on the ``ModelForm`` to list only ``User``
+    instances that have ``is_staff=True``. This may be helpful in the Django
+    admin.
 
     The callable form can be helpful, for instance, when used in conjunction
     with the Python ``datetime`` module to limit selections by date range. For
@@ -2018,16 +2025,13 @@ that control how the relationship functions.
     the Django model that represents the intermediate table that you want to
     use.
 
+    The ``through`` model can be specified using either the model class
+    directly or a :ref:`lazy reference <lazy-relationships>` to the model
+    class.
+
     The most common use for this option is when you want to associate
     :ref:`extra data with a many-to-many relationship
     <intermediary-manytomany>`.
-
-    .. note::
-
-        If you don't want multiple associations between the same instances, add
-        a :class:`~django.db.models.UniqueConstraint` including the from and to
-        fields. Django's automatically generated many-to-many tables include
-        such a constraint.
 
     .. note::
 
@@ -2039,7 +2043,9 @@ that control how the relationship functions.
 
     If you don't specify an explicit ``through`` model, there is still an
     implicit ``through`` model class you can use to directly access the table
-    created to hold the association. It has three fields to link the models.
+    created to hold the association. It has three fields to link the models, a
+    primary key and two foreign keys. There is a unique constraint on the two
+    foreign keys.
 
     If the source and target models differ, the following fields are
     generated:

@@ -99,18 +99,23 @@ class JSONField(CheckFieldDefaultMixin, Field):
     def get_db_prep_value(self, value, connection, prepared=False):
         if not prepared:
             value = self.get_prep_value(value)
-        if isinstance(value, expressions.Value) and isinstance(
-            value.output_field, JSONField
-        ):
-            value = value.value
-        elif hasattr(value, "as_sql"):
-            return value
         return connection.ops.adapt_json_value(value, self.encoder)
 
     def get_db_prep_save(self, value, connection):
+        # This slightly involved logic is to allow for `None` to be used to
+        # store SQL `NULL` while `Value(None, JSONField())` can be used to
+        # store JSON `null` while preventing compilable `as_sql` values from
+        # making their way to `get_db_prep_value`, which is what the `super()`
+        # implementation does.
         if value is None:
             return value
-        return self.get_db_prep_value(value, connection)
+        if (
+            isinstance(value, expressions.Value)
+            and value.value is None
+            and isinstance(value.output_field, JSONField)
+        ):
+            value = None
+        return super().get_db_prep_save(value, connection)
 
     def get_transform(self, name):
         transform = super().get_transform(name)
@@ -230,7 +235,7 @@ class HasKeyLookup(PostgresOperatorLookup):
             compiler, connection
         ):
             sql_parts.append(template % (lhs_sql, "%s"))
-            params.extend(lhs_params + [rhs_json_path])
+            params.extend([*lhs_params, rhs_json_path])
         return self._combine_sql_parts(sql_parts), tuple(params)
 
     def as_mysql(self, compiler, connection):
@@ -374,7 +379,7 @@ class KeyTransform(Transform):
     def as_mysql(self, compiler, connection):
         lhs, params, key_transforms = self.preprocess_lhs(compiler, connection)
         json_path = compile_json_path(key_transforms)
-        return "JSON_EXTRACT(%s, %%s)" % lhs, tuple(params) + (json_path,)
+        return "JSON_EXTRACT(%s, %%s)" % lhs, (*params, json_path)
 
     def as_oracle(self, compiler, connection):
         lhs, params, key_transforms = self.preprocess_lhs(compiler, connection)
@@ -405,12 +410,12 @@ class KeyTransform(Transform):
         lhs, params, key_transforms = self.preprocess_lhs(compiler, connection)
         if len(key_transforms) > 1:
             sql = "(%s %s %%s)" % (lhs, self.postgres_nested_operator)
-            return sql, tuple(params) + (key_transforms,)
+            return sql, (*params, key_transforms)
         try:
             lookup = int(self.key_name)
         except ValueError:
             lookup = self.key_name
-        return "(%s %s %%s)" % (lhs, self.postgres_operator), tuple(params) + (lookup,)
+        return "(%s %s %%s)" % (lhs, self.postgres_operator), (*params, lookup)
 
     def as_sqlite(self, compiler, connection):
         lhs, params, key_transforms = self.preprocess_lhs(compiler, connection)
@@ -421,7 +426,7 @@ class KeyTransform(Transform):
         return (
             "(CASE WHEN JSON_TYPE(%s, %%s) IN (%s) "
             "THEN JSON_TYPE(%s, %%s) ELSE JSON_EXTRACT(%s, %%s) END)"
-        ) % (lhs, datatype_values, lhs, lhs), (tuple(params) + (json_path,)) * 3
+        ) % (lhs, datatype_values, lhs, lhs), (*params, json_path) * 3
 
 
 class KeyTextTransform(KeyTransform):
@@ -437,7 +442,7 @@ class KeyTextTransform(KeyTransform):
         else:
             lhs, params, key_transforms = self.preprocess_lhs(compiler, connection)
             json_path = compile_json_path(key_transforms)
-            return "(%s ->> %%s)" % lhs, tuple(params) + (json_path,)
+            return "(%s ->> %%s)" % lhs, (*params, json_path)
 
     @classmethod
     def from_lookup(cls, lookup):

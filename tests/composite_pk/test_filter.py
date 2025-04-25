@@ -1,4 +1,16 @@
-from django.test import TestCase
+from django.db.models import (
+    Case,
+    F,
+    FilteredRelation,
+    OuterRef,
+    Q,
+    Subquery,
+    TextField,
+    When,
+)
+from django.db.models.functions import Cast
+from django.db.models.lookups import Exact
+from django.test import TestCase, skipUnlessDBFeature
 
 from .models import Comment, Tenant, User
 
@@ -54,29 +66,19 @@ class CompositePKFilterTests(TestCase):
             with self.subTest(lookup=lookup, count=count):
                 self.assertEqual(User.objects.filter(**lookup).count(), count)
 
-    def test_order_comments_by_pk_asc(self):
-        self.assertSequenceEqual(
-            Comment.objects.order_by("pk"),
-            (
-                self.comment_1,  # (1, 1)
-                self.comment_2,  # (1, 2)
-                self.comment_3,  # (1, 3)
-                self.comment_5,  # (1, 5)
-                self.comment_4,  # (2, 4)
-            ),
-        )
+    def test_rhs_pk(self):
+        msg = "CompositePrimaryKey cannot be used as a lookup value."
+        with self.assertRaisesMessage(ValueError, msg):
+            Comment.objects.filter(text__gt=F("pk")).count()
 
-    def test_order_comments_by_pk_desc(self):
-        self.assertSequenceEqual(
-            Comment.objects.order_by("-pk"),
-            (
-                self.comment_4,  # (2, 4)
-                self.comment_5,  # (1, 5)
-                self.comment_3,  # (1, 3)
-                self.comment_2,  # (1, 2)
-                self.comment_1,  # (1, 1)
-            ),
-        )
+    def test_rhs_combinable(self):
+        msg = "CombinedExpression expression does not support composite primary keys."
+        for expr in [F("pk") + (1, 1), (1, 1) + F("pk")]:
+            with (
+                self.subTest(expression=expr),
+                self.assertRaisesMessage(ValueError, msg),
+            ):
+                Comment.objects.filter(text__gt=expr).count()
 
     def test_filter_comments_by_pk_gt(self):
         c11, c12, c13, c24, c15 = (
@@ -179,6 +181,37 @@ class CompositePKFilterTests(TestCase):
                 self.assertSequenceEqual(
                     Comment.objects.filter(pk__in=pks).order_by("pk"), objs
                 )
+
+    def test_filter_comments_by_pk_in_subquery(self):
+        self.assertSequenceEqual(
+            Comment.objects.filter(
+                pk__in=Comment.objects.filter(pk=self.comment_1.pk),
+            ),
+            [self.comment_1],
+        )
+        self.assertSequenceEqual(
+            Comment.objects.filter(
+                pk__in=Comment.objects.filter(pk=self.comment_1.pk).values(
+                    "tenant_id", "id"
+                ),
+            ),
+            [self.comment_1],
+        )
+        self.comment_2.integer = self.comment_1.id
+        self.comment_2.save()
+        self.assertSequenceEqual(
+            Comment.objects.filter(
+                pk__in=Comment.objects.values("tenant_id", "integer"),
+            ),
+            [self.comment_1],
+        )
+
+    def test_filter_by_pk_in_none(self):
+        with self.assertNumQueries(0):
+            self.assertSequenceEqual(
+                Comment.objects.filter(pk__in=[(None, 1), (1, None)]),
+                [],
+            )
 
     def test_filter_comments_by_user_and_order_by_pk_asc(self):
         self.assertSequenceEqual(
@@ -410,3 +443,93 @@ class CompositePKFilterTests(TestCase):
         subquery = Comment.objects.filter(id=3).only("pk")
         queryset = User.objects.filter(comments__in=subquery)
         self.assertSequenceEqual(queryset, (self.user_2,))
+
+    def test_cannot_cast_pk(self):
+        msg = "Cast expression does not support composite primary keys."
+        with self.assertRaisesMessage(ValueError, msg):
+            Comment.objects.filter(text__gt=Cast(F("pk"), TextField())).count()
+
+    def test_explicit_subquery(self):
+        subquery = Subquery(User.objects.values("pk"))
+        self.assertEqual(User.objects.filter(pk__in=subquery).count(), 4)
+        self.assertEqual(Comment.objects.filter(user__in=subquery).count(), 5)
+
+    def test_filter_case_when(self):
+        msg = "When expression does not support composite primary keys."
+        with self.assertRaisesMessage(ValueError, msg):
+            Comment.objects.filter(text=Case(When(text="", then="pk")))
+        msg = "Case expression does not support composite primary keys."
+        with self.assertRaisesMessage(ValueError, msg):
+            Comment.objects.filter(text=Case(When(text="", then="text"), default="pk"))
+
+    def test_outer_ref_pk(self):
+        subquery = Subquery(Comment.objects.filter(pk=OuterRef("pk")).values("id"))
+        tests = [
+            ("", 5),
+            ("__gt", 0),
+            ("__gte", 5),
+            ("__lt", 0),
+            ("__lte", 5),
+        ]
+        for lookup, expected_count in tests:
+            with self.subTest(f"id{lookup}"):
+                queryset = Comment.objects.filter(**{f"id{lookup}": subquery})
+                self.assertEqual(queryset.count(), expected_count)
+
+    def test_unsupported_rhs(self):
+        pk = Exact(F("tenant_id"), 1)
+        msg = (
+            "'exact' subquery lookup of 'pk' only supports OuterRef "
+            "and QuerySet objects (received 'Exact')"
+        )
+        with self.assertRaisesMessage(ValueError, msg):
+            Comment.objects.filter(pk=pk)
+
+    @skipUnlessDBFeature("allow_sliced_subqueries_with_in")
+    def test_filter_comments_by_pk_exact_subquery(self):
+        self.assertSequenceEqual(
+            Comment.objects.filter(
+                pk=Comment.objects.filter(pk=self.comment_1.pk)[:1],
+            ),
+            [self.comment_1],
+        )
+        self.assertSequenceEqual(
+            Comment.objects.filter(
+                pk__in=Comment.objects.filter(pk=self.comment_1.pk).values(
+                    "tenant_id", "id"
+                )[:1],
+            ),
+            [self.comment_1],
+        )
+        self.comment_2.integer = self.comment_1.id
+        self.comment_2.save()
+        self.assertSequenceEqual(
+            Comment.objects.filter(
+                pk__in=Comment.objects.values("tenant_id", "integer"),
+            )[:1],
+            [self.comment_1],
+        )
+
+    def test_outer_ref_not_composite_pk(self):
+        subquery = Comment.objects.filter(pk=OuterRef("id")).values("id")
+        queryset = Comment.objects.filter(id=Subquery(subquery))
+
+        msg = "Composite field lookups only work with composite expressions."
+        with self.assertRaisesMessage(ValueError, msg):
+            self.assertEqual(queryset.count(), 5)
+
+    def test_outer_ref_in_filtered_relation(self):
+        msg = (
+            "This queryset contains a reference to an outer query and may only be used "
+            "in a subquery."
+        )
+        with self.assertRaisesMessage(ValueError, msg):
+            self.assertSequenceEqual(
+                Tenant.objects.annotate(
+                    filtered_tokens=FilteredRelation(
+                        "tokens",
+                        condition=Q(tokens__pk__gte=OuterRef("tokens")),
+                    )
+                ).filter(filtered_tokens=(1, 1)),
+                [self.tenant_1],
+            )

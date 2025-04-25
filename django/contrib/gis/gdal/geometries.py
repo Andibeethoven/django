@@ -1,46 +1,45 @@
 """
- The OGRGeometry is a wrapper for using the OGR Geometry class
- (see https://gdal.org/api/ogrgeometry_cpp.html#_CPPv411OGRGeometry).
- OGRGeometry may be instantiated when reading geometries from OGR Data Sources
- (e.g. SHP files), or when given OGC WKT (a string).
+The OGRGeometry is a wrapper for using the OGR Geometry class
+(see https://gdal.org/api/ogrgeometry_cpp.html#_CPPv411OGRGeometry).
+OGRGeometry may be instantiated when reading geometries from OGR Data Sources
+(e.g. SHP files), or when given OGC WKT (a string).
 
- While the 'full' API is not present yet, the API is "pythonic" unlike
- the traditional and "next-generation" OGR Python bindings.  One major
- advantage OGR Geometries have over their GEOS counterparts is support
- for spatial reference systems and their transformation.
+While the 'full' API is not present yet, the API is "pythonic" unlike
+the traditional and "next-generation" OGR Python bindings.  One major
+advantage OGR Geometries have over their GEOS counterparts is support
+for spatial reference systems and their transformation.
 
- Example:
-  >>> from django.contrib.gis.gdal import OGRGeometry, OGRGeomType, SpatialReference
-  >>> wkt1, wkt2 = 'POINT(-90 30)', 'POLYGON((0 0, 5 0, 5 5, 0 5)'
-  >>> pnt = OGRGeometry(wkt1)
-  >>> print(pnt)
-  POINT (-90 30)
-  >>> mpnt = OGRGeometry(OGRGeomType('MultiPoint'), SpatialReference('WGS84'))
-  >>> mpnt.add(wkt1)
-  >>> mpnt.add(wkt1)
-  >>> print(mpnt)
-  MULTIPOINT (-90 30,-90 30)
-  >>> print(mpnt.srs.name)
-  WGS 84
-  >>> print(mpnt.srs.proj)
-  +proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs
-  >>> mpnt.transform(SpatialReference('NAD27'))
-  >>> print(mpnt.proj)
-  +proj=longlat +ellps=clrk66 +datum=NAD27 +no_defs
-  >>> print(mpnt)
-  MULTIPOINT (-89.99993037860248 29.99979788655764,-89.99993037860248 29.99979788655764)
+Example:
+ >>> from django.contrib.gis.gdal import OGRGeometry, OGRGeomType, SpatialReference
+ >>> wkt1, wkt2 = 'POINT(-90 30)', 'POLYGON((0 0, 5 0, 5 5, 0 5)'
+ >>> pnt = OGRGeometry(wkt1)
+ >>> print(pnt)
+ POINT (-90 30)
+ >>> mpnt = OGRGeometry(OGRGeomType('MultiPoint'), SpatialReference('WGS84'))
+ >>> mpnt.add(wkt1)
+ >>> mpnt.add(wkt1)
+ >>> print(mpnt)
+ MULTIPOINT (-90 30,-90 30)
+ >>> print(mpnt.srs.name)
+ WGS 84
+ >>> print(mpnt.srs.proj)
+ +proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs
+ >>> mpnt.transform(SpatialReference('NAD27'))
+ >>> print(mpnt.proj)
+ +proj=longlat +ellps=clrk66 +datum=NAD27 +no_defs
+ >>> print(mpnt)
+ MULTIPOINT (-89.99993037860248 29.99979788655764,-89.99993037860248 29.99979788655764)
 
-  The OGRGeomType class is to make it easy to specify an OGR geometry type:
-  >>> from django.contrib.gis.gdal import OGRGeomType
-  >>> gt1 = OGRGeomType(3) # Using an integer for the type
-  >>> gt2 = OGRGeomType('Polygon') # Using a string
-  >>> gt3 = OGRGeomType('POLYGON') # It's case-insensitive
-  >>> print(gt1 == 3, gt1 == 'Polygon') # Equivalence works w/non-OGRGeomType objects
-  True True
+ The OGRGeomType class is to make it easy to specify an OGR geometry type:
+ >>> from django.contrib.gis.gdal import OGRGeomType
+ >>> gt1 = OGRGeomType(3) # Using an integer for the type
+ >>> gt2 = OGRGeomType('Polygon') # Using a string
+ >>> gt3 = OGRGeomType('POLYGON') # It's case-insensitive
+ >>> print(gt1 == 3, gt1 == 'Polygon') # Equivalence works w/non-OGRGeomType objects
+ True True
 """
 
 import sys
-import warnings
 from binascii import b2a_hex
 from ctypes import byref, c_char_p, c_double, c_ubyte, c_void_p, string_at
 
@@ -52,7 +51,6 @@ from django.contrib.gis.gdal.prototypes import geom as capi
 from django.contrib.gis.gdal.prototypes import srs as srs_api
 from django.contrib.gis.gdal.srs import CoordTransform, SpatialReference
 from django.contrib.gis.geometry import hex_regex, json_regex, wkt_regex
-from django.utils.deprecation import RemovedInDjango60Warning
 from django.utils.encoding import force_bytes
 
 
@@ -214,16 +212,6 @@ class OGRGeometry(GDALBase):
     def coord_dim(self):
         "Return the coordinate dimension of the Geometry."
         return capi.get_coord_dim(self.ptr)
-
-    # RemovedInDjango60Warning
-    @coord_dim.setter
-    def coord_dim(self, dim):
-        "Set the coordinate dimension of this Geometry."
-        msg = "coord_dim setter is deprecated. Use set_3d() instead."
-        warnings.warn(msg, RemovedInDjango60Warning, stacklevel=2)
-        if dim not in (2, 3):
-            raise ValueError("Geometry dimension must be either 2 or 3")
-        capi.set_coord_dim(self.ptr, dim)
 
     @property
     def geom_count(self):

@@ -13,7 +13,7 @@ from django.db.backends.ddl_references import (
     Table,
 )
 from django.db.backends.utils import names_digest, split_identifier, truncate_name
-from django.db.models import NOT_PROVIDED, Deferrable, Index
+from django.db.models import Deferrable, Index
 from django.db.models.fields.composite import CompositePrimaryKey
 from django.db.models.sql import Query
 from django.db.transaction import TransactionManagementError, atomic
@@ -95,7 +95,7 @@ class BaseDatabaseSchemaEditor:
     sql_alter_column_default = "ALTER COLUMN %(column)s SET DEFAULT %(default)s"
     sql_alter_column_no_default = "ALTER COLUMN %(column)s DROP DEFAULT"
     sql_alter_column_no_default_null = sql_alter_column_no_default
-    sql_delete_column = "ALTER TABLE %(table)s DROP COLUMN %(column)s CASCADE"
+    sql_delete_column = "ALTER TABLE %(table)s DROP COLUMN %(column)s"
     sql_rename_column = (
         "ALTER TABLE %(table)s RENAME COLUMN %(old_column)s TO %(new_column)s"
     )
@@ -313,12 +313,10 @@ class BaseDatabaseSchemaEditor:
         yield column_db_type
         if collation := field_db_params.get("collation"):
             yield self._collate_sql(collation)
-        if self.connection.features.supports_comments_inline and field.db_comment:
-            yield self._comment_sql(field.db_comment)
         # Work out nullability.
         null = field.null
         # Add database default.
-        if field.db_default is not NOT_PROVIDED:
+        if field.has_db_default():
             default_sql, default_params = self.db_default_sql(field)
             yield f"DEFAULT {default_sql}"
             params.extend(default_params)
@@ -373,6 +371,8 @@ class BaseDatabaseSchemaEditor:
             and field.unique
         ):
             yield self.connection.ops.tablespace_sql(tablespace, inline=True)
+        if self.connection.features.supports_comments_inline and field.db_comment:
+            yield self._comment_sql(field.db_comment)
 
     def column_sql(self, model, field, include_default=False):
         """
@@ -775,7 +775,7 @@ class BaseDatabaseSchemaEditor:
         self.execute(sql, params or None)
         # Drop the default if we need to
         if (
-            field.db_default is NOT_PROVIDED
+            not field.has_db_default()
             and not self.skip_default_on_alter(field)
             and self.effective_default(field) is not None
         ):
@@ -1108,15 +1108,15 @@ class BaseDatabaseSchemaEditor:
             actions.append(fragment)
             post_actions.extend(other_actions)
 
-        if new_field.db_default is not NOT_PROVIDED:
+        if new_field.has_db_default():
             if (
-                old_field.db_default is NOT_PROVIDED
+                not old_field.has_db_default()
                 or new_field.db_default != old_field.db_default
             ):
                 actions.append(
                     self._alter_column_database_default_sql(model, old_field, new_field)
                 )
-        elif old_field.db_default is not NOT_PROVIDED:
+        elif old_field.has_db_default():
             actions.append(
                 self._alter_column_database_default_sql(
                     model, old_field, new_field, drop=True
@@ -1130,11 +1130,7 @@ class BaseDatabaseSchemaEditor:
         #  4. Drop the default again.
         # Default change?
         needs_database_default = False
-        if (
-            old_field.null
-            and not new_field.null
-            and new_field.db_default is NOT_PROVIDED
-        ):
+        if old_field.null and not new_field.null and not new_field.has_db_default():
             old_default = self.effective_default(old_field)
             new_default = self.effective_default(new_field)
             if (
@@ -1153,7 +1149,7 @@ class BaseDatabaseSchemaEditor:
                 null_actions.append(fragment)
         # Only if we have a default and there is a change from NULL to NOT NULL
         four_way_default_alteration = (
-            new_field.has_default() or new_field.db_default is not NOT_PROVIDED
+            new_field.has_default() or new_field.has_db_default()
         ) and (old_field.null and not new_field.null)
         if actions or null_actions:
             if not four_way_default_alteration:
@@ -1175,7 +1171,7 @@ class BaseDatabaseSchemaEditor:
                     params,
                 )
             if four_way_default_alteration:
-                if new_field.db_default is NOT_PROVIDED:
+                if not new_field.has_db_default():
                     default_sql = "%s"
                     params = [new_default]
                 else:

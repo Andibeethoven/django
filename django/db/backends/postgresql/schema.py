@@ -120,6 +120,8 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         return None
 
     def _using_sql(self, new_field, old_field):
+        if new_field.generated:
+            return ""
         using_sql = " USING %(column)s::%(type)s"
         new_internal_type = new_field.get_internal_type()
         old_internal_type = old_field.get_internal_type()
@@ -320,7 +322,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         self.execute(index.remove_sql(model, self, concurrently=concurrently))
 
     def _delete_index_sql(self, model, name, sql=None, concurrently=False):
-        sql = (
+        sql = sql or (
             self.sql_delete_index_concurrently
             if concurrently
             else self.sql_delete_index

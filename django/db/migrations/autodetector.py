@@ -1132,13 +1132,15 @@ class MigrationAutodetector:
         # You can't just add NOT NULL fields with no default or fields
         # which don't allow empty strings as default.
         time_fields = (models.DateField, models.DateTimeField, models.TimeField)
+        auto_fields = (models.AutoField, models.SmallAutoField, models.BigAutoField)
         preserve_default = (
             field.null
             or field.has_default()
-            or field.db_default is not models.NOT_PROVIDED
+            or field.has_db_default()
             or field.many_to_many
             or (field.blank and field.empty_strings_allowed)
             or (isinstance(field, time_fields) and field.auto_now)
+            or (isinstance(field, auto_fields))
         )
         if not preserve_default:
             field = field.clone()
@@ -1150,11 +1152,7 @@ class MigrationAutodetector:
                 field.default = self.questioner.ask_not_null_addition(
                     field_name, model_name
                 )
-        if (
-            field.unique
-            and field.default is not models.NOT_PROVIDED
-            and callable(field.default)
-        ):
+        if field.unique and field.has_default() and callable(field.default):
             self.questioner.ask_unique_callable_default_addition(field_name, model_name)
         self.add_operation(
             app_label,
@@ -1235,7 +1233,7 @@ class MigrationAutodetector:
                 # Handle ForeignKey which can only have a single to_field.
                 remote_field_name = getattr(new_field.remote_field, "field_name", None)
                 if remote_field_name:
-                    to_field_rename_key = rename_key + (remote_field_name,)
+                    to_field_rename_key = (*rename_key, remote_field_name)
                     if to_field_rename_key in self.renamed_fields:
                         # Repoint both model and field name because to_field
                         # inclusion in ForeignKey.deconstruct() is based on
@@ -1251,14 +1249,14 @@ class MigrationAutodetector:
                     new_field.from_fields = tuple(
                         [
                             self.renamed_fields.get(
-                                from_rename_key + (from_field,), from_field
+                                (*from_rename_key, from_field), from_field
                             )
                             for from_field in from_fields
                         ]
                     )
                     new_field.to_fields = tuple(
                         [
-                            self.renamed_fields.get(rename_key + (to_field,), to_field)
+                            self.renamed_fields.get((*rename_key, to_field), to_field)
                             for to_field in new_field.to_fields
                         ]
                     )
@@ -1296,7 +1294,7 @@ class MigrationAutodetector:
                         old_field.null
                         and not new_field.null
                         and not new_field.has_default()
-                        and new_field.db_default is models.NOT_PROVIDED
+                        and not new_field.has_db_default()
                         and not new_field.many_to_many
                     ):
                         field = new_field.clone()

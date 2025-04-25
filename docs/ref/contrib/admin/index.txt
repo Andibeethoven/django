@@ -432,11 +432,6 @@ subclass::
         collapsed, using an expandable widget with a toggle for switching
         their visibility.
 
-        .. versionchanged:: 5.1
-
-            ``fieldsets`` using the ``collapse`` class now use ``<details>``
-            and ``<summary>`` elements, provided they define a ``name``.
-
     * ``description``
         A string of optional extra text to be displayed at the top of each
         fieldset, under the heading of the fieldset.
@@ -638,11 +633,6 @@ subclass::
 
           class PersonAdmin(admin.ModelAdmin):
               list_display = ["name", "decade_born_in"]
-
-    .. versionchanged:: 5.1
-
-        Support for using ``__`` lookups was added, when targeting related
-        fields.
 
     A few special cases to note about ``list_display``:
 
@@ -2337,11 +2327,6 @@ The ``InlineModelAdmin`` class adds or customizes:
     configured in :attr:`~ModelAdmin.fieldsets`, inlines with a ``collapse``
     class will be initially collapsed using an expandable widget.
 
-    .. versionchanged:: 5.1
-
-        ``fieldsets`` using the ``collapse`` class now use ``<details>`` and
-        ``<summary>`` elements, provided they define a ``name``.
-
 .. attribute:: InlineModelAdmin.extra
 
     This controls the number of extra forms the formset will display in
@@ -2628,6 +2613,13 @@ we can do this with inline admin models. Suppose we have the following models::
         group = models.ForeignKey(Group, on_delete=models.CASCADE)
         date_joined = models.DateField()
         invite_reason = models.CharField(max_length=64)
+
+        class Meta:
+            constraints = [
+                models.UniqueConstraint(
+                    fields=["person", "group"], name="unique_person_group"
+                )
+            ]
 
 The first step in displaying this intermediate model in the admin is to
 define an inline class for the ``Membership`` model::
@@ -2994,6 +2986,13 @@ Templates can override or extend base admin templates as described in
 .. attribute:: AdminSite.logout_template
 
     Path to a custom template that will be used by the admin site logout view.
+
+.. attribute:: AdminSite.password_change_form
+
+    .. versionadded:: 6.0
+
+    Subclass of :class:`~django.contrib.auth.forms.PasswordChangeForm` that
+    will be used by the admin site password change view.
 
 .. attribute:: AdminSite.password_change_template
 

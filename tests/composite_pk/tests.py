@@ -1,17 +1,23 @@
 import json
+import unittest
 from uuid import UUID
 
-import yaml
+try:
+    import yaml  # NOQA
+
+    HAS_YAML = True
+except ImportError:
+    HAS_YAML = False
 
 from django import forms
 from django.core import serializers
-from django.core.exceptions import FieldError
+from django.core.exceptions import FieldDoesNotExist, FieldError
 from django.db import IntegrityError, connection
 from django.db.models import CompositePrimaryKey
 from django.forms import modelform_factory
 from django.test import TestCase
 
-from .models import Comment, Post, Tenant, User
+from .models import Comment, Post, Tenant, TimeStamped, User
 
 
 class CommentForm(forms.ModelForm):
@@ -103,13 +109,10 @@ class CompositePKTests(TestCase):
 
     def test_composite_pk_in_fields(self):
         user_fields = {f.name for f in User._meta.get_fields()}
-        self.assertEqual(user_fields, {"pk", "tenant", "id", "email", "comments"})
+        self.assertTrue({"pk", "tenant", "id"}.issubset(user_fields))
 
         comment_fields = {f.name for f in Comment._meta.get_fields()}
-        self.assertEqual(
-            comment_fields,
-            {"pk", "tenant", "id", "user_id", "user", "text"},
-        )
+        self.assertTrue({"pk", "tenant", "id"}.issubset(comment_fields))
 
     def test_pk_field(self):
         pk = User._meta.get_field("pk")
@@ -122,7 +125,7 @@ class CompositePKTests(TestCase):
 
     def test_error_on_comment_pk_conflict(self):
         with self.assertRaises(IntegrityError):
-            Comment.objects.create(tenant=self.tenant, id=self.comment.id)
+            Comment.objects.create(tenant=self.tenant, id=self.comment.id, user_id=1)
 
     def test_get_primary_key_columns(self):
         self.assertEqual(
@@ -155,6 +158,20 @@ class CompositePKTests(TestCase):
         users = User.objects.values_list("pk").order_by("pk")
         self.assertNotIn('AS "pk"', str(users.query))
 
+    def test_raw(self):
+        users = User.objects.raw("SELECT * FROM composite_pk_user")
+        self.assertEqual(len(users), 1)
+        user = users[0]
+        self.assertEqual(user.tenant_id, self.user.tenant_id)
+        self.assertEqual(user.id, self.user.id)
+        self.assertEqual(user.email, self.user.email)
+
+    def test_raw_missing_PK_fields(self):
+        query = "SELECT tenant_id, email FROM composite_pk_user"
+        msg = "Raw query must include the primary key"
+        with self.assertRaisesMessage(FieldDoesNotExist, msg):
+            list(User.objects.raw(query))
+
     def test_only(self):
         users = User.objects.only("pk")
         self.assertSequenceEqual(users, (self.user,))
@@ -168,7 +185,7 @@ class CompositePKTests(TestCase):
             self.assertEqual(user.email, self.user.email)
 
     def test_model_forms(self):
-        fields = ["tenant", "id", "user_id", "text"]
+        fields = ["tenant", "id", "user_id", "text", "integer"]
         self.assertEqual(list(CommentForm.base_fields), fields)
 
         form = modelform_factory(Comment, fields="__all__")
@@ -218,6 +235,13 @@ class CompositePKFixturesTests(TestCase):
         self.assertEqual(post_2.tenant_id, 2)
         self.assertEqual(post_2.pk, (post_2.tenant_id, post_2.id))
 
+    def assert_deserializer(self, format, users, serialized_users):
+        deserialized_user = list(serializers.deserialize(format, serialized_users))[0]
+        self.assertEqual(deserialized_user.object.email, users[0].email)
+        self.assertEqual(deserialized_user.object.id, users[0].id)
+        self.assertEqual(deserialized_user.object.tenant, users[0].tenant)
+        self.assertEqual(deserialized_user.object.pk, users[0].pk)
+
     def test_serialize_user_json(self):
         users = User.objects.filter(pk=(1, 1))
         result = serializers.serialize("json", users)
@@ -235,6 +259,7 @@ class CompositePKFixturesTests(TestCase):
                 }
             ],
         )
+        self.assert_deserializer(format="json", users=users, serialized_users=result)
 
     def test_serialize_user_jsonl(self):
         users = User.objects.filter(pk=(1, 2))
@@ -251,7 +276,9 @@ class CompositePKFixturesTests(TestCase):
                 },
             },
         )
+        self.assert_deserializer(format="jsonl", users=users, serialized_users=result)
 
+    @unittest.skipUnless(HAS_YAML, "No yaml library detected")
     def test_serialize_user_yaml(self):
         users = User.objects.filter(pk=(2, 3))
         result = serializers.serialize("yaml", users)
@@ -269,6 +296,7 @@ class CompositePKFixturesTests(TestCase):
                 },
             ],
         )
+        self.assert_deserializer(format="yaml", users=users, serialized_users=result)
 
     def test_serialize_user_python(self):
         users = User.objects.filter(pk=(2, 4))
@@ -287,6 +315,13 @@ class CompositePKFixturesTests(TestCase):
                 },
             ],
         )
+        self.assert_deserializer(format="python", users=users, serialized_users=result)
+
+    def test_serialize_user_xml(self):
+        users = User.objects.filter(pk=(1, 1))
+        result = serializers.serialize("xml", users)
+        self.assertIn('<object model="composite_pk.user" pk=\'["1", "1"]\'>', result)
+        self.assert_deserializer(format="xml", users=users, serialized_users=result)
 
     def test_serialize_post_uuid(self):
         posts = Post.objects.filter(pk=(2, "11111111-1111-1111-1111-111111111111"))
@@ -304,3 +339,28 @@ class CompositePKFixturesTests(TestCase):
                 },
             ],
         )
+
+    def test_serialize_datetime(self):
+        result = serializers.serialize("json", TimeStamped.objects.all())
+        self.assertEqual(
+            json.loads(result),
+            [
+                {
+                    "model": "composite_pk.timestamped",
+                    "pk": [1, "2022-01-12T05:55:14.956"],
+                    "fields": {
+                        "id": 1,
+                        "created": "2022-01-12T05:55:14.956",
+                        "text": "",
+                    },
+                },
+            ],
+        )
+
+    def test_invalid_pk_extra_field(self):
+        json = (
+            '[{"fields": {"email": "user0001@example.com", "id": 1, "tenant": 1}, '
+            '"pk": [1, 1, "extra"], "model": "composite_pk.user"}]'
+        )
+        with self.assertRaises(serializers.base.DeserializationError):
+            next(serializers.deserialize("json", json))
